@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-codemap</title>
+<meta name="description" content="A Claude Code plugin that saves per-file code summaries as Markdown and guides later sessions to consult them. Includes edit tracking and refresh reminders.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fdfdfb; --fg: #1c1c1a; --muted: #60605b;
+    --link: #1a4fa0; --border: #d5d5ce; --code-bg: #f3f3ef;
+  }
+  * { box-sizing: border-box; }
+  body {
+    max-width: 48rem; margin: 0 auto; padding: 2rem 1.25rem 4rem;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.7 -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Hiragino Sans", sans-serif;
+    overflow-wrap: anywhere;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem 1.5rem; margin-bottom: 1.5rem; }
+  h1 { font-size: 1.7rem; line-height: 1.3; margin: 0; }
+  h2 { font-size: 1.2rem; margin: 2.5rem 0 .75rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  h3 { font-size: 1rem; margin: 1.4rem 0 .6rem; }
+  p { margin: .85rem 0; }
+  a { color: var(--link); text-underline-offset: .15em; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; }
+  .langnav { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .85rem; }
+  .langnav a[aria-current="true"] { font-weight: 700; }
+  pre { border: 1px solid var(--border); background: var(--code-bg); padding: .85rem 1rem; overflow-x: auto; font: 13px/1.7 ui-monospace, "SF Mono", Menlo, monospace; }
+  code { font: .88em ui-monospace, "SF Mono", Menlo, monospace; background: var(--code-bg); padding: .1em .25em; border-radius: 2px; }
+  pre code { font: inherit; background: transparent; padding: 0; border-radius: 0; overflow-wrap: normal; }
+  blockquote { margin: 1rem 0; padding: .1rem 1rem; border-left: 3px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 1rem 0; font-size: .94rem; }
+  th, td { padding: .7rem; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  th:first-child, td:first-child { width: 35%; }
+  ul { padding-left: 1.3rem; }
+  li { margin: .65rem 0; }
+  details { margin: 1.25rem 0; padding: .8rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  summary { cursor: pointer; color: var(--link); }
+  img { display: block; max-width: 100%; height: auto; margin: 1rem auto; border: 1px solid var(--border); }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: .85rem; color: var(--muted); }
+  .lang { display: none; }
+  .lang.ko { word-break: keep-all; }
+  html[data-lang="en"] .lang.en, html[data-lang="ko"] .lang.ko, html[data-lang="ja"] .lang.ja { display: block; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161815; --fg: #d9d9d3; --muted: #a0a39b; --link: #8ab4f8; --border: #454840; --code-bg: #22251f; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>claude-codemap</h1>
+  <nav class="langnav" id="langnav" aria-label="Language">
+    <a href="#en" data-l="en" lang="en">English</a>
+    <a href="#ko" data-l="ko" lang="ko">한국어</a>
+    <a href="#ja" data-l="ja" lang="ja">日本語</a>
+  </nav>
+</header>
+<main>
+<article class="lang en" lang="en">
+<p>claude-codemap is a Claude Code plugin that saves notes about each source file: its role, key symbols, dependencies, and things to watch out for. Later sessions are instructed to consult these notes before searching the codebase.</p>
+<p>Claude reads the source and writes one entry per file, grouped by module in <code>docs/codemap/</code>. An example entry:</p>
+<pre><code class="language-markdown">### src/payments/webhook.ts — Stripe webhook receiver
+- Symbols: handleWebhook, verifySignature, replayGuard
+- Depends on: stripe, PaymentStore, AuditLog
+- Gotchas: Verify the signature against the raw request body,
+  before parsing it as JSON.
+</code></pre>
+<p>The notes stay in your project as Markdown. No separate daemon or build step is needed.</p>
+<h2 id="en-section-1">Usage</h2>
+<h3>1. Prepare and install</h3>
+<p>Use the Claude Code terminal CLI with plugin support. The hooks require <strong>bash, Git, and jq</strong> on PATH. macOS and Linux are the verified platforms; Windows is untested.</p>
+<p>If jq is missing, install it in your terminal: <code>brew install jq</code> on macOS, or <code>sudo apt-get install jq</code> on Debian/Ubuntu. Without jq, codemap guidance, edit tracking, and refresh reminders do not work. In projects with a codemap, the hooks report the missing dependency.</p>
+<p>In Claude Code, register this repository as a plugin source:</p>
+<pre><code class="language-text">/plugin marketplace add ayeeatelier/claude-codemap
+</code></pre>
+<p>Then install codemap from that source:</p>
+<pre><code class="language-text">/plugin install codemap@claude-codemap
+</code></pre>
+<p>If prompted for a scope, choose <strong>User</strong> to use it across your projects, <strong>Project</strong> to share the setting with collaborators, or <strong>Local</strong> for yourself in this project only. See the <a href="https://code.claude.com/docs/en/discover-plugins#install-plugins">Claude Code installation guide</a> for scope and activation details.</p>
+<h3>2. Create the project's codemap</h3>
+<p>After installation, start a new Claude Code session in the project you want to index and ask:</p>
+<blockquote>
+<p>Create a codemap for this project.</p>
+</blockquote>
+<p>You can also invoke the skill directly with <code>/codemap:codemap-init</code>.</p>
+<p>Claude lists the source files, reads them through parallel scanner agents, and writes the index. The skill instructs Claude to compare the indexed paths against the source list before reporting completion.</p>
+<p>Open <code>docs/codemap/README.md</code> to check the module list and update rules. Each module's Markdown file contains the per-file entries. In subsequent sessions, the plugin adds instructions to consult this index. Projects without <code>docs/codemap/</code> are left alone.</p>
+<details>
+<summary>Alternative: install from a local clone</summary>
+<p>Clone the repository in your terminal:</p>
+<pre><code class="language-sh">git clone https://github.com/ayeeatelier/claude-codemap.git
+</code></pre>
+<p>In Claude Code, register the cloned directory instead of the GitHub source above. Replace the example with its absolute path:</p>
+<pre><code class="language-text">/plugin marketplace add /absolute/path/to/claude-codemap
+</code></pre>
+<p>Then run <code>/plugin install codemap@claude-codemap</code> and follow step 2 above. Cloning or installing this plugin does not create an index of your project; that is a separate step.</p>
+</details>
+<h2 id="en-section-2">How it works and when to refresh</h2>
+<p>The plugin contains three hooks, the <code>codemap-init</code> skill, and a Haiku scanner agent. Hooks record paths and send instructions to Claude; Claude writes the summaries.</p>
+<table>
+<thead>
+<tr>
+<th>When</th>
+<th>What the plugin does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A session starts, resumes, or compacts</td>
+<td>Adds instructions to read the index before broad code searches.</td>
+</tr>
+<tr>
+<td>Claude edits a source file with Edit or Write</td>
+<td>Records its path in <code>docs/codemap/.stale</code> for a later refresh.</td>
+</tr>
+<tr>
+<td>Claude runs a command containing a recognized <code>git commit</code> through Bash</td>
+<td>If entries are pending, asks Claude to refresh them before reporting the feature complete. This is a reminder after the command, not a Git commit blocker.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Tracking is limited to Claude's tools.</strong> Changes from an external editor, shell scripts, <code>git pull</code>, or file deletions and moves are not automatically recorded. Commits in an ordinary terminal do not trigger the reminder. A failed or intermediate commit can also trigger it; Claude is told to ignore the reminder in those cases.</p>
+<p>Before finishing work, or when entries are out of date, ask Claude:</p>
+<blockquote>
+<p>Refresh the pending codemap entries using the plugin's queue tool, then check them against the current source.</p>
+</blockquote>
+<p>The session instructions tell Claude how to claim pending paths and mark them complete after updating the entries. Do not clear <code>.stale</code> or other queue files by hand: edits made during a refresh must remain pending. An interrupted refresh can be recovered through the same queue tool.</p>
+<p>For changes made outside Claude, name the changed paths, including deleted or moved files, and ask it to update their entries and the module list. If you do not know the affected paths, ask it to rebuild the project's codemap.</p>
+<details>
+<summary>Illustration: source searches and codemap-guided exploration</summary>
+<p><img alt="Side-by-side example: source searches on the left; saved codemap notes followed by source verification on the right." loading="lazy" src="assets/codemap-concept-v2.png"/></p>
+<p>The left side finds relevant files through source searches. The right side uses saved notes about each file's role, symbols, dependencies, and gotchas to narrow down what to inspect. Both paths still require checking the source. This is an example of the exploration workflow, not a measured performance comparison.</p>
+<p>Claude writes the notes as Markdown in <code>docs/codemap/</code>. Hooks record paths changed with Edit or Write and give refresh reminders. To refresh, Claude claims the pending paths, updates their entries, and completes that batch. The hooks do not rewrite summaries themselves. Changes made outside Claude need an explicit update request.</p>
+</details>
+<h2 id="en-section-3">Cost and benefit</h2>
+<p>Building the index requires reading the selected source files and generating summaries. Ongoing usage includes the session guidance, reading relevant entries, and rewriting entries after changes. All of these consume tokens; the total depends on your project and workflow.</p>
+<p>A small development experiment with two questions and three with/without comparisons reported 25–39% fewer tokens with the index. The repository does not include enough data to reproduce those runs or calculate monetary savings or a break-even point. See the <a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/measurement-notes.md">measurement notes</a> for the recorded figures and their limits.</p>
+<h2 id="en-section-4">Good to know</h2>
+<ul>
+<li>Summaries can be wrong or incomplete. They help locate and understand code; check the source before relying on a claim. When the index and source disagree, update the index.</li>
+<li>LSP is optional and installed separately. When available, the guidance prefers it for precise definitions, references, and call hierarchies. See <a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/lsp-setup.md">LSP companion setup</a>. codemap itself does not build a call graph.</li>
+<li>Common source extensions are built in. Add other extensions to <code>docs/codemap/.extensions</code>, one per line without a dot. Vendored directories, build output, and the codemap directory itself are excluded from tracking.</li>
+<li>For small repositories, maintaining the notes may cost more than repeating a search. The init skill is instructed to warn before indexing very small projects and suggest staged generation for large ones; these are heuristics, not measured cutoffs.</li>
+</ul>
+<h2 id="en-section-5">Contributing</h2>
+<p>Bug reports and pull requests are welcome. Please open an issue before a large change. The implementation uses Bash and awk; the scanner and skill instructions are Markdown.</p>
+<p>Run the checks from the repository root before submitting a PR:</p>
+<pre><code class="language-sh">bash tests/run.sh
+</code></pre>
+<pre><code class="language-sh">shellcheck scripts/*.sh tests/*.sh
+</code></pre>
+<p>CI runs both checks. Changes to the public documentation should stay consistent across the three READMEs and the language sections in <code>docs/index.html</code>.</p>
+<p>To inspect the real Claude Code scenario without making model calls, run:</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --dry-run
+</code></pre>
+<p>After Claude Code is authenticated, run the live validation:</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --live
+</code></pre>
+<p>The live run loads this checkout with <code>--plugin-dir</code>, creates a disposable two-file project, and checks codemap generation, edit tracking, queue refresh, and the commit reminder. It consumes model tokens. Failed runs preserve the fixture and JSONL logs; pass <code>--keep</code> to preserve a successful run too.</p>
+<h2 id="en-section-6">License</h2>
+<p><a href="https://github.com/ayeeatelier/claude-codemap/blob/main/LICENSE">MIT</a></p>
+</article>
+
+<article class="lang ko" lang="ko">
+<p>claude-codemap은 소스 파일의 역할·주요 심볼·의존성·주의사항을 마크다운으로 저장하는 Claude Code 플러그인입니다. 이후 세션에서는 코드베이스를 검색하기 전에 이 기록을 참고하도록 Claude에게 안내합니다.</p>
+<p>Claude가 소스를 읽고 파일마다 요약을 작성하며, 결과는 모듈별로 묶어 <code>docs/codemap/</code>에 저장합니다. 아래는 파일 하나에 대한 요약 예시입니다.</p>
+<pre><code class="language-markdown">### src/payments/webhook.ts — Stripe 웹훅 수신부
+- Symbols: handleWebhook, verifySignature, replayGuard
+- Depends on: stripe, PaymentStore, AuditLog
+- Gotchas: 요청 본문을 JSON으로 파싱하기 전에
+  원본 본문으로 서명을 검증해야 함.
+</code></pre>
+<p>요약은 프로젝트 안에 마크다운 파일로 남습니다. 별도의 데몬이나 빌드 단계는 필요하지 않습니다.</p>
+<h2 id="ko-section-1">사용방법</h2>
+<h3>1. 준비 및 설치</h3>
+<p>플러그인을 지원하는 Claude Code 터미널 CLI를 사용합니다. 훅을 실행하려면 <strong>bash, Git, jq</strong>가 PATH에 있어야 합니다. macOS와 Linux에서 확인했으며, Windows는 미검증입니다.</p>
+<p>jq가 없다면 터미널에서 설치합니다. macOS는 <code>brew install jq</code>, Debian/Ubuntu는 <code>sudo apt-get install jq</code>를 실행합니다. jq가 없으면 코드맵 사용 안내·변경 추적·갱신 알림이 동작하지 않으며, 코드맵이 있는 프로젝트에서는 훅이 의존성 누락을 알립니다.</p>
+<p>Claude Code에서 이 저장소를 플러그인을 받아올 곳으로 등록합니다.</p>
+<pre><code class="language-text">/plugin marketplace add ayeeatelier/claude-codemap
+</code></pre>
+<p>등록한 곳에서 codemap을 설치합니다.</p>
+<pre><code class="language-text">/plugin install codemap@claude-codemap
+</code></pre>
+<p>설치 범위를 묻는다면 여러 프로젝트에서 혼자 사용할 때는 <strong>User</strong>, 이 프로젝트의 협업자와 설정을 공유할 때는 <strong>Project</strong>, 이 프로젝트에서 혼자 사용할 때는 <strong>Local</strong>을 선택합니다. 범위와 활성화에 관한 자세한 내용은 <a href="https://code.claude.com/docs/en/discover-plugins#install-plugins">Claude Code 설치 안내</a>를 참고하세요.</p>
+<h3>2. 프로젝트 코드맵 생성</h3>
+<p>설치 후, 코드맵을 만들 프로젝트에서 새 Claude Code 세션을 시작하고 요청합니다.</p>
+<blockquote>
+<p>이 프로젝트 코드맵 만들어 주세요.</p>
+</blockquote>
+<p><code>/codemap:codemap-init</code>으로 스킬을 직접 실행할 수도 있습니다.</p>
+<p>Claude가 소스 파일 목록을 확인하고, 스캐너 에이전트를 병렬로 실행해 소스를 읽은 뒤 인덱스를 작성합니다. 스킬에는 완료를 알리기 전에 요약에 포함된 경로와 소스 파일 목록을 대조하도록 지시가 들어 있습니다.</p>
+<p>생성 후 <code>docs/codemap/README.md</code>에서 모듈 목록과 갱신 규칙을 확인하세요. 각 모듈의 마크다운 파일에는 파일별 요약이 들어 있습니다. 이후 세션에는 이 인덱스를 참고하라는 안내가 추가됩니다. <code>docs/codemap/</code>이 없는 프로젝트에는 훅이 아무 작업도 하지 않습니다.</p>
+<details>
+<summary>다른 설치 방법: 로컬 클론 사용</summary>
+<p>터미널에서 저장소를 클론합니다.</p>
+<pre><code class="language-sh">git clone https://github.com/ayeeatelier/claude-codemap.git
+</code></pre>
+<p>Claude Code에서 위의 GitHub 등록 명령 대신 클론한 디렉터리를 등록합니다. 예시 경로를 실제 절대 경로로 바꾸세요.</p>
+<pre><code class="language-text">/plugin marketplace add /absolute/path/to/claude-codemap
+</code></pre>
+<p>그다음 <code>/plugin install codemap@claude-codemap</code>을 실행하고, 위의 2단계에 따라 프로젝트 코드맵을 생성합니다. 플러그인을 클론하거나 설치하는 것만으로 프로젝트의 인덱스가 만들어지지는 않습니다.</p>
+</details>
+<h2 id="ko-section-2">동작 방식과 갱신</h2>
+<p>플러그인은 훅 3개, <code>codemap-init</code> 스킬, Haiku 스캐너 에이전트로 구성됩니다. 훅은 경로를 기록하고 Claude에게 지시를 전달하며, 요약을 작성하는 것은 Claude입니다.</p>
+<table>
+<thead>
+<tr>
+<th>시점</th>
+<th>플러그인이 하는 일</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>세션 시작·재개·컨텍스트 압축 후</td>
+<td>광범위한 코드 검색 전에 인덱스를 읽으라는 안내를 추가합니다.</td>
+</tr>
+<tr>
+<td>Claude가 Edit 또는 Write로 소스 수정</td>
+<td>나중에 요약을 갱신할 수 있도록 경로를 <code>docs/codemap/.stale</code>에 기록합니다.</td>
+</tr>
+<tr>
+<td>Claude가 Bash로 실행한 명령에서 <code>git commit</code>을 감지</td>
+<td>갱신 대기 항목이 있으면 기능 완료를 알리기 전에 요약을 갱신하도록 요청합니다. 명령 실행 후의 알림이며, Git 커밋을 차단하지 않습니다.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>변경 추적은 Claude의 도구 사용에 한정됩니다.</strong> 외부 편집기, 셸 스크립트, <code>git pull</code>로 인한 변경이나 파일 삭제·이동은 자동으로 기록되지 않습니다. 일반 터미널의 커밋도 알림을 발생시키지 않습니다. 실패한 커밋이나 중간 커밋에도 알림이 나올 수 있으며, 이때는 무시하도록 Claude에게 안내합니다.</p>
+<p>작업을 마무리하기 전이나 요약이 오래되었을 때 Claude에게 요청하세요.</p>
+<blockquote>
+<p>플러그인의 큐 도구로 갱신 대기 중인 코드맵 항목을 갱신하고, 현재 소스와 맞는지 확인해 주세요.</p>
+</blockquote>
+<p>세션 안내에는 Claude가 큐에서 처리할 경로를 가져오고, 요약을 갱신한 뒤 완료 처리하는 방법이 포함됩니다. 갱신 중 발생한 변경이 남아 있어야 하므로 <code>.stale</code> 등 큐 파일을 직접 비우지 마세요. 중단된 갱신도 같은 큐 도구로 다시 처리할 수 있습니다.</p>
+<p>Claude 밖에서 수정했다면 삭제·이동한 파일을 포함해 변경한 경로를 알려주고, 해당 요약과 모듈 목록을 갱신하도록 요청하세요. 어떤 파일이 바뀌었는지 모른다면 프로젝트 코드맵을 다시 만들어 달라고 요청합니다.</p>
+<details>
+<summary>그림으로 보기: 소스 검색과 코드맵을 참고한 탐색</summary>
+<p><img alt="왼쪽은 소스 검색으로 파일을 찾고, 오른쪽은 저장된 코드맵 요약을 참고한 뒤 소스를 확인하는 비교 예시입니다." loading="lazy" src="assets/codemap-concept-v2.png"/></p>
+<p>왼쪽은 소스 검색으로 관련 파일을 찾는 예시이고, 오른쪽은 파일별 역할·주요 심볼·의존성·주의점이 담긴 요약을 참고해 확인할 소스를 좁히는 예시입니다. 어느 쪽이든 실제 소스 확인은 필요합니다. 탐색 흐름을 설명하는 그림이며, 성능 측정 결과는 아닙니다.</p>
+<p>요약은 Claude가 작성해 <code>docs/codemap/</code>에 Markdown으로 저장합니다. 훅은 Edit·Write로 바뀐 경로를 기록하고 갱신을 알립니다. 갱신할 때 Claude는 claim으로 대기 중인 경로를 가져와 해당 요약을 수정한 뒤, complete로 그 배치를 완료 처리합니다. 훅이 요약을 직접 다시 쓰지는 않습니다. Claude 밖에서 수정한 내용은 별도로 갱신을 요청해야 합니다.</p>
+</details>
+<h2 id="ko-section-3">비용과 효과</h2>
+<p>최초 생성에는 선택한 소스 파일을 읽고 요약을 작성하는 토큰이 필요합니다. 이후에도 세션 안내, 관련 요약 읽기, 변경된 요약의 재작성에 토큰을 사용합니다. 총사용량은 프로젝트와 작업 방식에 따라 달라집니다.</p>
+<p>개발 중 수행한 소규모 실험에서는 질문 2개를 대상으로 인덱스 유무를 총 3회 비교했고, 인덱스가 있을 때 토큰이 25~39% 적게 사용되었습니다. 다만 이 저장소에는 같은 실험을 재현하거나 금전적 절감액·손익분기점을 계산하기에 충분한 자료가 없습니다. 기록된 수치와 한계는 <a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/measurement-notes.md">측정 메모</a>(영문)를 참고하세요.</p>
+<h2 id="ko-section-4">알아두면 좋은 것</h2>
+<ul>
+<li>요약에는 오류나 누락이 있을 수 있습니다. 코드의 위치와 역할을 파악하는 데 활용하되, 판단에 필요한 내용은 소스에서 확인하세요. 인덱스와 소스가 다르면 인덱스를 고칩니다.</li>
+<li>LSP는 선택사항이며 별도로 설치합니다. 사용 가능할 때 정확한 정의 위치·참조·호출 계층을 찾는 데 우선 사용하도록 안내합니다. <a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/lsp-setup.md">LSP 설정 안내</a>(영문)를 참고하세요. codemap 자체는 호출 그래프를 만들지 않습니다.</li>
+<li>주요 소스 확장자는 기본 지원합니다. 다른 확장자는 <code>docs/codemap/.extensions</code>에 점 없이 한 줄에 하나씩 추가하세요. 벤더 디렉터리, 빌드 결과물, 코드맵 디렉터리 자체는 추적에서 제외됩니다.</li>
+<li>작은 저장소에서는 요약 유지 비용이 반복 검색 비용보다 클 수 있습니다. 초기화 스킬은 아주 작은 프로젝트에서는 먼저 경고하고, 큰 프로젝트에서는 단계별 생성을 제안하도록 되어 있습니다. 이는 실측으로 정한 기준이 아닌 경험칙입니다.</li>
+</ul>
+<h2 id="ko-section-5">기여</h2>
+<p>버그 리포트와 PR을 환영합니다. 큰 변경은 이슈로 먼저 논의해 주세요. 구현에는 Bash와 awk를 사용하며, 스캐너와 스킬 지시문은 마크다운입니다.</p>
+<p>PR을 보내기 전에 저장소 루트에서 다음 검증을 실행하세요.</p>
+<pre><code class="language-sh">bash tests/run.sh
+</code></pre>
+<pre><code class="language-sh">shellcheck scripts/*.sh tests/*.sh
+</code></pre>
+<p>CI에서도 두 검증을 실행합니다. 공개 문서를 수정할 때는 README 3개 언어판과 <code>docs/index.html</code>의 각 언어 섹션에 같은 내용을 반영해 주세요.</p>
+<p>모델을 호출하지 않고 실제 Claude Code 검증 시나리오를 확인하려면 다음 명령을 실행합니다.</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --dry-run
+</code></pre>
+<p>Claude Code 인증을 마친 뒤 라이브 검증을 실행합니다.</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --live
+</code></pre>
+<p>라이브 검증은 <code>--plugin-dir</code>로 현재 체크아웃을 불러오고, 소스 파일 2개가 있는 일회용 프로젝트에서 코드맵 생성·수정 감지·큐 갱신·커밋 알림을 확인합니다. 모델 토큰을 사용합니다. 실패한 실행은 fixture와 JSONL 로그를 보존하며, 성공한 실행도 남기려면 <code>--keep</code>을 사용하세요.</p>
+<h2 id="ko-section-6">라이선스</h2>
+<p><a href="https://github.com/ayeeatelier/claude-codemap/blob/main/LICENSE">MIT</a></p>
+</article>
+
+<article class="lang ja" lang="ja">
+<p>claude-codemap は、ソースファイルの役割・主要なシンボル・依存関係・注意点をマークダウンに保存する Claude Code プラグインです。以後のセッションでは、コードベースを検索する前にこの記録を参照するよう Claude に案内します。</p>
+<p>Claude がソースを読み、ファイルごとに要約を作成し、モジュール別にまとめて <code>docs/codemap/</code> に保存します。以下は 1 ファイル分の要約例です。</p>
+<pre><code class="language-markdown">### src/payments/webhook.ts — Stripe Webhook 受信部
+- Symbols: handleWebhook, verifySignature, replayGuard
+- Depends on: stripe, PaymentStore, AuditLog
+- Gotchas: リクエスト本文を JSON としてパースする前に、
+  元の本文で署名を検証する必要があります。
+</code></pre>
+<p>要約はプロジェクト内にマークダウンファイルとして残ります。別途のデーモンやビルド工程は不要です。</p>
+<h2 id="ja-section-1">使い方</h2>
+<h3>1. 準備とインストール</h3>
+<p>プラグインに対応した Claude Code のターミナル CLI を使います。フックの実行には <strong>bash、Git、jq</strong> が PATH 上に必要です。macOS と Linux で確認しており、Windows は未検証です。</p>
+<p>jq がない場合は、ターミナルでインストールします。macOS では <code>brew install jq</code>、Debian/Ubuntu では <code>sudo apt-get install jq</code> を実行します。jq がないと、コードマップの利用案内・変更追跡・更新通知は動作しません。コードマップがあるプロジェクトでは、フックが依存ツールの不足を通知します。</p>
+<p>Claude Code で、このリポジトリをプラグインの入手元として登録します。</p>
+<pre><code class="language-text">/plugin marketplace add ayeeatelier/claude-codemap
+</code></pre>
+<p>登録した入手元から codemap をインストールします。</p>
+<pre><code class="language-text">/plugin install codemap@claude-codemap
+</code></pre>
+<p>インストール範囲を尋ねられた場合、複数のプロジェクトで自分だけが使うなら <strong>User</strong>、このプロジェクトの共同作業者と設定を共有するなら <strong>Project</strong>、このプロジェクトで自分だけが使うなら <strong>Local</strong> を選びます。範囲と有効化の詳細は <a href="https://code.claude.com/docs/en/discover-plugins#install-plugins">Claude Code のインストール案内</a>を参照してください。</p>
+<h3>2. プロジェクトのコードマップを作成</h3>
+<p>インストール後、対象のプロジェクトで新しい Claude Code セッションを開始し、依頼します。</p>
+<blockquote>
+<p>このプロジェクトのコードマップを作ってください。</p>
+</blockquote>
+<p><code>/codemap:codemap-init</code> でスキルを直接実行することもできます。</p>
+<p>Claude がソースファイルを列挙し、スキャナーエージェントを並列実行してソースを読み、インデックスを作成します。スキルには、完了を報告する前に要約内のパスとソースファイル一覧を照合する指示が含まれています。</p>
+<p>作成後は <code>docs/codemap/README.md</code> でモジュール一覧と更新ルールを確認してください。各モジュールのマークダウンファイルには、ファイルごとの要約が入ります。以後のセッションでは、このインデックスを参照する案内が追加されます。<code>docs/codemap/</code> のないプロジェクトではフックは何もしません。</p>
+<details>
+<summary>別のインストール方法：ローカルクローンを使う</summary>
+<p>ターミナルでリポジトリをクローンします。</p>
+<pre><code class="language-sh">git clone https://github.com/ayeeatelier/claude-codemap.git
+</code></pre>
+<p>Claude Code で、上記の GitHub 登録コマンドの代わりにクローンしたディレクトリを登録します。例のパスを実際の絶対パスに置き換えてください。</p>
+<pre><code class="language-text">/plugin marketplace add /absolute/path/to/claude-codemap
+</code></pre>
+<p>次に <code>/plugin install codemap@claude-codemap</code> を実行し、上の手順 2 に従ってプロジェクトのコードマップを作成します。プラグインのクローンやインストールだけでは、プロジェクトのインデックスは作成されません。</p>
+</details>
+<h2 id="ja-section-2">動作と更新</h2>
+<p>プラグインは 3 つのフック、<code>codemap-init</code> スキル、Haiku スキャナーエージェントで構成されます。フックがパスを記録して Claude に指示を渡し、Claude が要約を書きます。</p>
+<table>
+<thead>
+<tr>
+<th>タイミング</th>
+<th>プラグインの動作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>セッション開始・再開・コンテキスト圧縮後</td>
+<td>広範なコード検索の前にインデックスを読むよう案内します。</td>
+</tr>
+<tr>
+<td>Claude が Edit または Write でソースを編集</td>
+<td>後で要約を更新できるよう、パスを <code>docs/codemap/.stale</code> に記録します。</td>
+</tr>
+<tr>
+<td>Claude が Bash で実行したコマンドから <code>git commit</code> を検出</td>
+<td>更新待ちの項目があれば、機能の完了を報告する前に要約を更新するよう依頼します。コマンド実行後の通知であり、Git コミットを阻止するものではありません。</td>
+</tr>
+</tbody>
+</table>
+<p><strong>変更追跡は Claude のツール利用に限られます。</strong> 外部エディタ、シェルスクリプト、<code>git pull</code> による変更やファイルの削除・移動は自動記録されません。通常のターミナルからのコミットも通知の対象外です。失敗したコミットや中間コミットで通知される場合もありますが、その場合は無視するよう Claude に案内します。</p>
+<p>作業を終える前や要約が古くなったときに、Claude に依頼してください。</p>
+<blockquote>
+<p>プラグインのキューツールで更新待ちのコードマップ項目を更新し、現在のソースと一致するか確認してください。</p>
+</blockquote>
+<p>セッションの案内には、Claude がキューから処理対象のパスを取得し、要約を更新してから完了扱いにする手順が含まれています。更新中に発生した変更を残す必要があるため、<code>.stale</code> などのキューファイルを手動で空にしないでください。中断した更新も、同じキューツールで再開できます。</p>
+<p>Claude の外で編集した場合は、削除・移動したファイルも含めて変更したパスを伝え、該当する要約とモジュール一覧の更新を依頼してください。対象のパスが分からない場合は、プロジェクトのコードマップを作り直すよう依頼します。</p>
+<details>
+<summary>図解：ソース検索とコードマップを使った探索</summary>
+<p><img alt="左はソース検索でファイルを探し、右は保存済みのコードマップを参照してからソースを確認する比較例です。" loading="lazy" src="assets/codemap-concept-v2.png"/></p>
+<p>左側はソース検索で関連ファイルを探す例です。右側は、各ファイルの役割・主要なシンボル・依存関係・注意点をまとめた要約を使い、確認するソースを絞り込む例です。どちらも実際のソースを確認する必要があります。探索の流れを示す図であり、性能の測定結果ではありません。</p>
+<p>要約は Claude が書き、<code>docs/codemap/</code> に Markdown で保存します。フックは Edit・Write で変更されたパスを記録し、更新を促します。更新時には、Claude が claim で対象のパスを取得し、要約を修正してから complete でそのバッチを完了扱いにします。フック自体が要約を書き直すわけではありません。Claude の外で変更した内容は、別途更新を依頼する必要があります。</p>
+</details>
+<h2 id="ja-section-3">コストと効果</h2>
+<p>初回の作成では、対象のソースファイルを読み、要約を書くためにトークンを使います。その後も、セッションの案内、関連する要約の読み取り、変更された要約の書き直しにトークンが必要です。総使用量はプロジェクトと作業方法によって変わります。</p>
+<p>開発中の小規模な実験では、2 種類の質問についてインデックスの有無を計 3 回比較し、インデックスありで 25〜39% 少ないトークン使用量が記録されました。ただし、このリポジトリには実験の再現や金銭的な節約額・損益分岐点の算出に十分な資料はありません。記録された数値と制約は<a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/measurement-notes.md">測定メモ</a>（英語）を参照してください。</p>
+<h2 id="ja-section-4">知っておくとよいこと</h2>
+<ul>
+<li>要約には誤りや抜けがあり得ます。コードの場所や役割を把握するために使い、判断に必要な内容はソースで確認してください。インデックスとソースが食い違う場合はインデックスを修正します。</li>
+<li>LSP は任意で、別途インストールします。利用可能な場合は、正確な定義位置・参照・呼び出し階層の確認に優先して使うよう案内します。<a href="https://github.com/ayeeatelier/claude-codemap/blob/main/docs/lsp-setup.md">LSP 設定ガイド</a>（英語）を参照してください。codemap 自体は呼び出しグラフを作りません。</li>
+<li>主要なソース拡張子は組み込み済みです。ほかの拡張子は <code>docs/codemap/.extensions</code> に、ドットなしで 1 行に 1 つ追加してください。ベンダーディレクトリ、ビルド出力、コードマップのディレクトリ自体は追跡から除外されます。</li>
+<li>小さなリポジトリでは、要約の維持が検索の繰り返しより高くつく場合があります。初期化スキルは、非常に小さなプロジェクトでは事前に警告し、大きなものでは段階的な作成を提案するよう指示されています。これは実測による境界ではなく、経験則です。</li>
+</ul>
+<h2 id="ja-section-5">コントリビュート</h2>
+<p>バグ報告とプルリクエストを歓迎します。大きな変更は、まず Issue で相談してください。実装には Bash と awk を使い、スキャナーとスキルの指示はマークダウンで記述しています。</p>
+<p>PR を送る前に、リポジトリのルートで以下のチェックを実行してください。</p>
+<pre><code class="language-sh">bash tests/run.sh
+</code></pre>
+<pre><code class="language-sh">shellcheck scripts/*.sh tests/*.sh
+</code></pre>
+<p>CI でも両方を実行します。公開ドキュメントを変更する際は、3 言語の README と <code>docs/index.html</code> の各言語セクションで内容を揃えてください。</p>
+<p>モデルを呼び出さずに実際の Claude Code 検証シナリオを確認するには、次を実行します。</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --dry-run
+</code></pre>
+<p>Claude Code の認証後、ライブ検証を実行します。</p>
+<pre><code class="language-sh">bash tests/live-claude-code.sh --live
+</code></pre>
+<p>ライブ検証は <code>--plugin-dir</code> で現在のチェックアウトを読み込み、2 つのソースファイルを持つ一時プロジェクトで、コードマップ生成・編集検知・キュー更新・コミット通知を確認します。モデルのトークンを使用します。失敗した実行では fixture と JSONL ログが保存され、成功した実行も残す場合は <code>--keep</code> を指定します。</p>
+<h2 id="ja-section-6">ライセンス</h2>
+<p><a href="https://github.com/ayeeatelier/claude-codemap/blob/main/LICENSE">MIT</a></p>
+</article>
+</main>
+<footer><a href="https://github.com/ayeeatelier/claude-codemap/blob/main/LICENSE">MIT</a> · <a href="https://github.com/ayeeatelier/claude-codemap">GitHub</a> · ayee.atelier</footer>
+<script>
+(function () {
+  var valid = { en: true, ko: true, ja: true };
+  var links = document.getElementById("langnav").querySelectorAll("a[data-l]");
+  function apply(lang) {
+    if (!valid[lang]) return;
+    document.documentElement.setAttribute("data-lang", lang);
+    document.documentElement.setAttribute("lang", lang);
+    links.forEach(function (a) {
+      if (a.getAttribute("data-l") === lang) a.setAttribute("aria-current", "true");
+      else a.removeAttribute("aria-current");
+    });
+    try { localStorage.setItem("codemap-lang", lang); } catch (e) {}
+  }
+  function hashLanguage() { return location.hash.slice(1).split("-")[0]; }
+  var initial = hashLanguage();
+  if (!valid[initial]) {
+    try { initial = localStorage.getItem("codemap-lang"); } catch (e) {}
+  }
+  if (!valid[initial]) initial = (navigator.language || "").slice(0, 2).toLowerCase();
+  apply(valid[initial] ? initial : "en");
+  links.forEach(function (a) {
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      var lang = a.getAttribute("data-l");
+      apply(lang);
+      history.replaceState(null, "", "#" + lang);
+    });
+  });
+  window.addEventListener("hashchange", function () { apply(hashLanguage()); });
+})();
+</script>
+</body>
+</html>

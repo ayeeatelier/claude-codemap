@@ -1,0 +1,18 @@
+{
+  "name": "codemap",
+  "description": "Semantic code index for Claude Code: per-file summaries written by Claude itself (docs/codemap/), staleness tracked by hooks, so each session is pointed at the index before it reaches for grep.",
+  "version": "0.2.1",
+  "author": {
+    "name": "ayeeatelier",
+    "email": "ayee.atelier@gmail.com"
+  },
+  "homepage": "https://github.com/ayeeatelier/claude-codemap",
+  "license": "MIT",
+  "keywords": [
+    "index",
+    "codemap",
+    "exploration",
+    "lsp",
+    "context"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "claude-codemap",
+  "description": "Semantic code index for Claude Code — per-file summaries written by Claude, staleness tracked by hooks.",
+  "owner": {
+    "name": "ayeeatelier",
+    "email": "ayee.atelier@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "codemap",
+      "source": "./",
+      "description": "Semantic code index for Claude Code: per-file summaries written by Claude itself (docs/codemap/), staleness tracked by hooks, so each session is pointed at the index before it reaches for grep."
+    }
+  ]
+}
